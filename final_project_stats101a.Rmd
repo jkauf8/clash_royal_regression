@@ -1,0 +1,326 @@
+---
+title: "Stats 101A Final Project"
+author: "Justin Kaufman, Nick Darrow, Sarah Kosic"
+date: "3/8/2022"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(leaps) # For best subset selection.
+library(car) # For variance inflation factors.
+library(corrplot) # For color map on correlations.
+```
+
+
+## League of Legends Match Data
+
+```{r}
+df<-read.csv("lol_games.csv")
+head(df)
+colnames(df)
+```
+
+```{r}
+df2<-df[,-1]
+head(df2)
+```
+
+
+game duration, isblood, killedfire, killedwater, killedairdrake, killedearth, killedelder,
+
+
+```{r}
+# Fit a multiple linear regression model.
+mlr.model <- lm(goldDiff~., data = df2)
+summary(mlr.model)
+```
+
+```{r}
+#par(mfrow=c(2,2))
+plot(mlr.model)
+```
+
+
+
+# NA's are caused by all 0 values, so we can remove them. Cols: destroyedTopBaseTurret, destroyedMidBaseTurret, lostTopBaseTurret, lostMidBaseTurret
+
+```{r}
+which(colnames(df2)=='destroyedTopBaseTurret')
+which(colnames(df2)=='destroyedMidBaseTurret')
+which(colnames(df2)=='lostTopBaseTurret')
+which(colnames(df2)=='lostMidBaseTurret')
+
+df3<-df2[,-c(31,32,34, 35)]
+head(df3)
+```
+
+
+## keep columns that are significant 
+```{r}
+keep_cols<-(summary(mlr.model)$coefficients[ ,4] < 0.05)
+keep_cols[2]<-TRUE
+sum(keep_cols)
+```
+
+## we now have a dataframe that got rid of insignificant predictors
+```{r}
+df3<-df3[,keep_cols]
+df3
+```
+
+
+```{r}
+mlr.model2<-lm(goldDiff~., data=df3)
+```
+
+
+```{r}
+summary(mlr.model2)
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(mlr.model2)
+```
+## new df without response 
+```{r}
+df4<-df3[,-1]
+head(df4)
+```
+
+
+
+## assessing multicollinearaity to get rid of more predictors 
+
+
+```{r}
+library(corrplot)
+# Visualize the aliasing in the model matrix, excluding the intercept.
+X <- model.matrix(~.-1, df4)
+
+# Create color map on pairwise correlations.
+contrast.vectors.correlations <- cor(X)
+corrplot(contrast.vectors.correlations, type = "full", addgrid.col = "gray",
+         tl.col = "black", tl.srt = 90, method = "color", tl.cex=0.8)
+
+```
+```{r}
+vif(mlr.model2)
+```
+
+
+```{r}
+summary(mlr.model2)
+```
+## from this correlation matrix, it seems these combinations of variables are highly correlated, we check each combo to see how much and determine if we should remove. We end up removing assists, lostRiftHerald, champleveldiff
+
+
+```{r}
+cor(df4$kills, df4$assists)
+
+cor(df4$champLevelDiff, df4$expDiff)
+
+cor(df4$lostRiftHerald, df4$killedRiftHerald)
+```
+
+```{r}
+which(colnames(df4)=='assists')
+which(colnames(df4)=='lostRiftHerald')
+which(colnames(df4)=='champLevelDiff')
+```
+```{r}
+df5<-df4[,-c(2,10,36)]
+head(df5)
+```
+
+## add back in goldDiff col
+```{r}
+df5$goldDiff<-df$goldDiff
+df5
+```
+
+
+## best subset of predictors 
+```{r}
+best_subset <- regsubsets(goldDiff~., data = df5, nvmax = 35,
+                          method = "exhaustive", really.big = TRUE)
+```
+
+```{r}
+sumBS <- summary(best_subset)
+```
+
+
+```{r}
+cat("BIC values of submodels \n")
+print(sumBS$bic)
+cat("\n")
+cat("Minimum BIC value \n")
+print(min(sumBS$bic))
+```
+```{r}
+which(sumBS$bic==-79593.55)
+```
+
+
+```{r}
+plot(seq_along(sumBS$bic),sumBS$bic, xlab='Submodel',ylab='BIC' )
+```
+
+
+
+```{r}
+# modelwith.minimum.BIC tells us the location of the smallest element in the vector "sumBS$bic"
+modelwith.minimum.BIC <- which.min(sumBS$bic)
+# We select the best model from the list.
+best.model <- sumBS$which[modelwith.minimum.BIC,]
+print(best.model)
+```
+
+```{r}
+
+keep_cols<-(unname(best.model))
+keep_cols<-keep_cols[2:length(keep_cols)]
+
+df6<-df5[,keep_cols]
+
+df6$goldDiff<-df$goldDiff
+head(df6)
+```
+
+```{r}
+plot(df6$kills, df6$deaths)
+```
+
+
+```{r}
+colnames(df6)
+```
+
+
+```{r}
+mlr.model3<-lm(goldDiff~., data=df6)
+```
+
+
+## this vif shows that removing correlated predictors earlier worked as vif score went down
+```{r}
+vif(mlr.model3)
+```
+
+
+
+
+```{r}
+summary(mlr.model3)
+```
+
+```{r}
+df_interaction<-df6
+
+df_interaction$expDiff_kills<-df_interaction$expDiff*df_interaction$kills
+df_interaction$expDiff_deaths<-df_interaction$expDiff*df_interaction$deaths
+df_interaction$kills_deaths<-df_interaction$kills*df_interaction$deaths
+
+df_interaction<-df_interaction[,-33]
+```
+
+
+```{r}
+head(df_interaction)
+```
+
+
+```{r}
+nonadditive.lm <- lm(goldDiff~. + expDiff:kills + expDiff:deaths + kills:deaths, data = df6)
+summary(nonadditive.lm)
+```
+
+## after including interaction terms, the vif of predictors goes up so we just not gonna use em
+
+```{r}
+library(corrplot)
+# Visualize the aliasing in the model matrix, excluding the intercept.
+X <- model.matrix(~.-1, df_interaction)
+
+# Create color map on pairwise correlations.
+contrast.vectors.correlations <- cor(X)
+corrplot(contrast.vectors.correlations, type = "full", addgrid.col = "gray",
+         tl.col = "black", tl.srt = 90, method = "color", tl.cex=0.8)
+
+```
+
+
+
+```{r}
+vif(nonadditive.lm)
+```
+
+
+
+## Fit a multiple linear regression model 
+
+```{r}
+summary(mlr.model3)
+```
+
+
+## residual diagnostics for model 3
+```{r}
+par(mfrow=c(2,2))
+plot(mlr.model3)
+```
+## transformation Inverse response plot to try and fix normality
+
+
+```{r}
+summary(df6$goldDiff)
+```
+
+```{r}
+newGold <- df6$goldDiff + 21578.1    
+```
+
+
+```{r}
+df7<-df6
+
+df7$goldDiff<-newGold
+
+summary(df7$goldDiff)
+```
+
+```{r}
+mlr.model4<-lm(goldDiff~., data=df7)
+```
+
+
+
+
+```{r}
+invResPlot(mlr.model4)
+```
+## tranforming the response shows little improvement so nah
+
+```{r}
+final.model<-mlr.model3
+```
+
+
+## CI for the coefficients to prove they should be there
+
+## summary of model will give R^2. high f-value will tell us if all explanatory variables together significantly predict y. find out which regression coefficients are significant and drop rest?residual diagnostics 
+
+
+
+
+
+
+
+
+
